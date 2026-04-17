@@ -66,6 +66,23 @@ npm run dev:frontend
 
 Open [http://localhost:3000](http://localhost:3000).
 
+## Deploy on Vercel (important)
+
+This repository is a monorepo-style layout, so in Vercel Project Settings set:
+
+- **Root Directory**: `frontend`
+- **Framework Preset**: Next.js
+
+Then add frontend env var:
+
+- `NEXT_PUBLIC_BACKEND_URL` = your deployed backend URL
+
+Backend should be deployed separately (for example Render/Railway/Fly/another Vercel project) and must include:
+
+- `REDDIT_ACCESS_TOKEN`
+- `REDDIT_AD_ACCOUNT_ID`
+- Optional `REDDIT_TEST_EVENT_CODE`
+
 ## How to test events
 
 1. Enter your Reddit Pixel ID.
