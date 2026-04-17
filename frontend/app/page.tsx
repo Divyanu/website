@@ -58,9 +58,20 @@ export default function HomePage() {
   const summarizeCapi = (capi: CapiResult, eventName: string) => {
     if (capi.ok) return `Success: ${eventName} delivered to Reddit CAPI`;
     const body = capi.responseBody as Record<string, unknown> | null;
-    const msg = body && (body.error ?? body.message);
+    if (!body) return `Failed: HTTP ${capi.status}`;
+    const msg = body.error ?? body.message ?? body.reason;
     if (typeof msg === "string") return msg;
-    return `Failed: HTTP ${capi.status}`;
+    const redditRaw = body.reddit_response;
+    if (redditRaw && typeof redditRaw === "object") {
+      const n = redditRaw as Record<string, unknown>;
+      const m = n.error ?? n.message;
+      if (typeof m === "string") return m;
+    }
+    try {
+      return `Failed: HTTP ${capi.status} — ${JSON.stringify(body).slice(0, 280)}`;
+    } catch {
+      return `Failed: HTTP ${capi.status}`;
+    }
   };
 
   const appendLog = (entry: EventLogEntry) => {
@@ -80,25 +91,21 @@ export default function HomePage() {
   const sendCapiEvent = async (
     eventName: RedditEventName,
     payload: Record<string, unknown>,
-    options?: { providedEmail?: string; externalId?: string }
+    options: { eventTimeSeconds: number; providedEmail?: string; externalId?: string }
   ): Promise<CapiResult> => {
+    const conversionId = typeof payload.conversion_id === "string" ? payload.conversion_id : "";
+    const { conversion_id: _cid, conversionId: _cId, ...customRest } = payload;
     const requestBody: Record<string, unknown> = {
       event_name: eventName,
-      event_time: Math.floor(Date.now() / 1000),
+      event_time: options.eventTimeSeconds,
       event_source_url: window.location.href,
-      user_data: {
-        email: options?.providedEmail || email || undefined,
-        external_id: options?.externalId
-      },
-      custom_data: payload,
+      conversion_id: conversionId,
+      custom_data: customRest,
       client_user_agent: typeof navigator !== "undefined" ? navigator.userAgent : "",
-      test_mode: testMode,
-      test_event_code: testMode ? testEventCode || undefined : undefined
+      test_mode: true
     };
 
-    if (typeof payload.value === "number") requestBody.value = payload.value;
-    if (typeof payload.currency === "string") requestBody.currency = payload.currency;
-    if (typeof payload.rdt_cid === "string") requestBody.click_id = payload.rdt_cid;
+    console.info("[CAPI] POST /capi/event", { event_name: eventName, conversion_id: conversionId, event_time: options.eventTimeSeconds });
 
     let response: Response;
     try {
@@ -127,7 +134,9 @@ export default function HomePage() {
     }
 
     const parsed = body as Record<string, unknown>;
-    const redditOk = Boolean(parsed.ok ?? response.ok);
+    const redditOk = parsed.ok === true;
+
+    console.info("[CAPI] backend response", { http: response.status, ok: response.ok && redditOk, body: parsed });
 
     return {
       ok: response.ok && redditOk,
@@ -142,12 +151,15 @@ export default function HomePage() {
   const fireEvent = async (
     eventType: RedditEventName,
     payload: Record<string, unknown>,
-    options?: { replayOf?: string; providedEmail?: string; externalId?: string; userId?: string }
+    options?: { replayOf?: string; providedEmail?: string; externalId?: string; userId?: string; conversionId?: string }
   ) => {
     if (!pixelId.trim()) {
       pushSystemLog("Set a Pixel ID before firing events.");
       return;
     }
+
+    const eventTimeSeconds = Math.floor(Date.now() / 1000);
+    const conversionId = options?.conversionId ?? crypto.randomUUID();
 
     ensureRedditPixel(pixelId, debugMode);
 
@@ -155,8 +167,11 @@ export default function HomePage() {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
 
+    /** Same id on Pixel + CAPI for deduplication; Pixel uses `conversionId` per Reddit pixel.js. */
     const enrichedPayload = {
       ...payload,
+      conversion_id: conversionId,
+      conversionId,
       ...(options?.userId ? { simulator_user_id: options.userId } : {})
     };
 
@@ -181,6 +196,7 @@ export default function HomePage() {
 
     try {
       const capi = await sendCapiEvent(eventType, enrichedPayload, {
+        eventTimeSeconds,
         providedEmail: options?.providedEmail,
         externalId: options?.externalId
       });
@@ -355,9 +371,34 @@ export default function HomePage() {
 
   const replayEvent = async (entry: EventLogEntry) => {
     if (entry.source === "system") return;
-    const payload =
-      typeof entry.payload === "object" && entry.payload !== null ? (entry.payload as Record<string, unknown>) : {};
-    await fireEvent(entry.eventType as RedditEventName, payload, { replayOf: entry.id });
+    let payload: Record<string, unknown> = {};
+    let conversionId: string | undefined;
+
+    const raw = entry.payload;
+    if (raw && typeof raw === "object") {
+      if (
+        "payload" in raw &&
+        typeof (raw as PixelPayload).payload === "object" &&
+        (raw as PixelPayload).payload !== null
+      ) {
+        const inner = (raw as PixelPayload).payload as Record<string, unknown>;
+        payload = { ...inner };
+        conversionId =
+          typeof inner.conversion_id === "string"
+            ? inner.conversion_id
+            : typeof inner.conversionId === "string"
+              ? inner.conversionId
+              : undefined;
+      } else {
+        payload = { ...(raw as Record<string, unknown>) };
+        conversionId = typeof payload.conversion_id === "string" ? payload.conversion_id : undefined;
+      }
+    }
+
+    await fireEvent(entry.eventType as RedditEventName, payload, {
+      replayOf: entry.id,
+      ...(conversionId ? { conversionId } : {})
+    });
   };
 
   const sourceBadgeClass = (source: EventLogEntry["source"]) => {
@@ -508,10 +549,11 @@ export default function HomePage() {
       <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-2 text-xl font-semibold text-slate-900">CAPI status</h2>
         <p className="mb-4 text-sm text-slate-600">
-          Last server-side call to Reddit (<code className="rounded bg-slate-100 px-1">POST /capi/event</code> → Reddit
-          v2.0). Configure <code className="rounded bg-slate-100 px-1">REDDIT_AD_ACCOUNT_ID</code>,{" "}
-          <code className="rounded bg-slate-100 px-1">REDDIT_ACCESS_TOKEN</code>, and optional{" "}
-          <code className="rounded bg-slate-100 px-1">REDDIT_PIXEL_ID</code> on the backend.
+          Last server-side call: browser <code className="rounded bg-slate-100 px-1">POST /capi/event</code> → Reddit{" "}
+          <code className="rounded bg-slate-100 px-1">/api/v2/conversions/events</code>. Backend env:{" "}
+          <code className="rounded bg-slate-100 px-1">REDDIT_ACCESS_TOKEN</code>,{" "}
+          <code className="rounded bg-slate-100 px-1">REDDIT_PIXEL_ID</code>. Each click uses one{" "}
+          <code className="rounded bg-slate-100 px-1">conversion_id</code> for Pixel + CAPI deduplication.
         </p>
         {!capiStatus && <p className="text-sm text-slate-500">No CAPI calls yet.</p>}
         {capiStatus && (

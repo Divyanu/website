@@ -5,17 +5,16 @@ This project is a minimal full-stack environment for validating Reddit Pixel (cl
 ## What it includes
 
 - Next.js frontend with:
-  - Dynamic Pixel ID input
-  - Buttons for `PageVisit`, `ViewContent`, `AddToCart`, `Purchase`
+  - Dynamic Pixel ID input (browser pixel only)
+  - Buttons for `PageVisit`, `ViewContent`, `AddToCart`, `Purchase`, `View Cart`, etc.
   - `SignUp` form (`name + email`)
-  - Live event log with timestamps, payloads, backend request/response
-  - Test Mode + Test Event Code toggle
+  - **Shared `conversion_id` / `conversionId`** on each action for Pixel + CAPI deduplication
+  - Live event log and **CAPI status** panel (request to backend, JSON sent to Reddit, Reddit response)
   - Delay simulation, simulated users, and event replay
 - Express backend with:
-  - `POST /capi/event` endpoint
-  - Reddit **v2.0** CAPI forwarding to `https://ads-api.reddit.com/api/v2.0/conversions/events/{account_id}`
-  - Payload shape: `event_at`, `event_type.tracking_type`, `user` (hashed email, `user_agent`, `ip_address`), `event_metadata`
-  - Credentials from env: account id + access token (+ optional pixel id)
+  - `POST /capi/event` — accepts event fields, fills **IP** and **user agent** from the request, injects **`REDDIT_PIXEL_ID`** and **`REDDIT_ACCESS_TOKEN`** from env (never sent to the browser)
+  - Forwards to `POST https://ads-api.reddit.com/api/v2/conversions/events` with sandbox-friendly **`test_mode: true`**
+  - Console logging for debugging
 
 ## Project structure
 
@@ -38,10 +37,8 @@ cp backend/.env.example backend/.env
 
 Then set:
 
-- `REDDIT_AD_ACCOUNT_ID` — used in Reddit URL `POST /api/v2.0/conversions/events/{account_id}`
-- `REDDIT_ACCESS_TOKEN` — Conversion Access Token (Bearer); alias `REDDIT_CONVERSION_ACCESS_TOKEN` also works
-- Optional: `REDDIT_PIXEL_ID` — stored in `event_metadata.pixel_id` for traceability
-- Optional: `REDDIT_TEST_EVENT_CODE` — used when the frontend sends `test_mode: true`
+- `REDDIT_ACCESS_TOKEN` — Conversion Access Token (Bearer)
+- `REDDIT_PIXEL_ID` — same pixel you use in the UI (server attaches it to the CAPI payload)
 
 3. Configure frontend environment:
 
@@ -78,34 +75,29 @@ Then add frontend env var:
 
 - `NEXT_PUBLIC_BACKEND_URL` = your deployed backend URL
 
-Backend should be deployed separately (for example Render/Railway/Fly/another Vercel project) and must include:
+Backend should be deployed separately (for example Render/Railway/Fly) and must include:
 
 - `REDDIT_ACCESS_TOKEN`
-- `REDDIT_AD_ACCOUNT_ID`
-- Optional `REDDIT_TEST_EVENT_CODE`
+- `REDDIT_PIXEL_ID`
 
 ## How to test events
 
-1. Enter your Reddit Pixel ID.
-2. (Optional) enable Test Mode and add test event code.
-3. Trigger events with the UI buttons/form.
-4. Each action sends:
-   - Pixel event via `window.rdt("track", ...)`
-   - Server request to `/capi/event` for Reddit CAPI
-5. Inspect:
-   - In-app event log (frontend + backend response)
-   - Reddit Ads dashboard event diagnostics / test events
+1. Enter your Reddit Pixel ID in the UI (for the browser pixel).
+2. Trigger events with the UI buttons/form.
+3. Each action:
+   - Fires the Pixel with `conversionId` + `conversion_id`
+   - POSTs to your `/capi/event` with the same `conversion_id` and `event_time`
+4. Inspect:
+   - Browser **Network** tab: `/capi/event` and Reddit response (via your server JSON)
+   - **CAPI status** panel and **Live Event Log**
 
 ## Verification in Reddit Ads
 
-- In Reddit Ads Manager, open your Pixel and Conversion diagnostics.
-- Fire events from this app and verify:
-  - Event names match (`PageVisit`, `ViewContent`, `AddToCart`, `SignUp`, `Purchase`)
-  - Event volume increments for pixel and server pathways
-  - Test events appear when Test Mode is enabled
+- In Reddit Ads Manager, open Events Manager / diagnostics.
+- Confirm events and deduplication behavior using the shared conversion id.
 
 ## Notes
 
-- Pixel loading and tracking logic: `frontend/lib/redditPixel.ts`
-- CAPI forwarding + hashing logic: `backend/app/server.js`
-- UI actions and event orchestration: `frontend/app/page.tsx`
+- Pixel loading and tracking: `frontend/lib/redditPixel.ts`
+- CAPI forwarding: `backend/app/server.js`
+- UI orchestration: `frontend/app/page.tsx`
