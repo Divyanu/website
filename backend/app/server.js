@@ -1,12 +1,22 @@
 /**
- * Reddit Conversion API (CAPI)
+ * Reddit Conversion API (CAPI) — server-side attribution partner to the browser Pixel.
  *
- * Reddit’s working server endpoint is:
- *   POST https://ads-api.reddit.com/api/v2.0/conversions/events/{account_id}
+ * Why two channels?
+ * - Pixel: runs in the browser; strong for on-site behavior, but can be blocked or drop requests.
+ * - CAPI: server-to-Reddit; resilient, can include hashed PII, and pairs with the Pixel for coverage.
  *
- * The flat URL `/api/v2/conversions/events` + legacy body often returns 4xx/5xx — that was causing your HTTP 500s.
+ * Deduplication (conversion_id):
+ * - Advertisers often fire the SAME logical conversion from Pixel and CAPI.
+ * - Reddit matches pairs using a shared `conversion_id` (we mirror it into `event_metadata.conversion_id`).
+ * - If Pixel and CAPI use DIFFERENT IDs, Reddit may count ONE sale TWICE — inflating results and breaking trust.
  *
- * Env: REDDIT_ACCESS_TOKEN, REDDIT_PIXEL_ID, and REDDIT_AD_ACCOUNT_ID (or we try to read `aid` from a JWT token).
+ * Endpoint note:
+ * - Docs sometimes describe a flat `POST .../api/v2/conversions/events` body with `pixel_id` at the top level.
+ * - The live Ads API expects v2.0: `POST https://ads-api.reddit.com/api/v2.0/conversions/events/{account_id}`
+ *   with `events[]` shaped as `event_at`, `event_type`, `user`, `event_metadata` (pixel_id lives in metadata).
+ * - This server translates our simple `/capi/event` JSON into that v2.0 shape so calls succeed in production-like tests.
+ *
+ * Env: REDDIT_ACCESS_TOKEN, REDDIT_PIXEL_ID, REDDIT_AD_ACCOUNT_ID (or `aid` / `lid` inside a JWT).
  */
 
 const crypto = require("crypto");
@@ -141,7 +151,8 @@ app.post("/capi/event", async (req, res) => {
       user_data = {},
       value: bodyValue,
       currency: bodyCurrency,
-      test_mode
+      test_mode,
+      test_event_code: testEventCodeBody
     } = req.body;
 
     if (!event_name || !event_source_url) {
@@ -236,7 +247,10 @@ app.post("/capi/event", async (req, res) => {
       events: [redditEvent]
     };
 
-    const testCode = process.env.REDDIT_TEST_EVENT_CODE;
+    const testCodeFromEnv = (process.env.REDDIT_TEST_EVENT_CODE || "").trim();
+    const testCodeFromClient =
+      typeof testEventCodeBody === "string" && testEventCodeBody.trim() ? testEventCodeBody.trim() : "";
+    const testCode = testCodeFromClient || testCodeFromEnv;
     if (redditRequestBody.test_mode && testCode) {
       redditRequestBody.test_event_code = testCode;
     }
