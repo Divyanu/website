@@ -1,36 +1,44 @@
 import { RedditEventName } from "./types";
 
+/**
+ * Reddit's pixel.js expects a pre-bootstrap `window.rdt` that only uses `callQueue`.
+ * After load, Reddit assigns `rdt.sendEvent` to a **function** — never `.push` on it.
+ * @see https://www.redditstatic.com/ads/pixel.js (drains `callQueue`, sets `sendEvent`)
+ */
+type RedditRdtStub = ((...args: unknown[]) => void) & { callQueue: unknown[][] };
+
 declare global {
   interface Window {
-    rdt?: (...args: unknown[]) => void;
+    rdt?: RedditRdtStub;
   }
 }
 
 let initializedPixelId: string | null = null;
 
+function installRedditPixelStub() {
+  if (typeof window === "undefined" || window.rdt) return;
+
+  const callQueue: unknown[][] = [];
+  const rdt = Object.assign(
+    function rdt(...args: unknown[]) {
+      callQueue.push(args);
+    },
+    { callQueue }
+  ) as RedditRdtStub;
+
+  window.rdt = rdt;
+
+  const scriptTag = document.createElement("script");
+  scriptTag.src = "https://www.redditstatic.com/ads/pixel.js";
+  scriptTag.async = true;
+  const firstScript = document.getElementsByTagName("script")[0];
+  firstScript.parentNode?.insertBefore(scriptTag, firstScript);
+}
+
 export function ensureRedditPixel(pixelId: string, debug = true) {
   if (typeof window === "undefined" || !pixelId.trim()) return;
 
-  if (!window.rdt) {
-    // Official Reddit bootstrap snippet adapted for dynamic loading.
-    (function (w, d) {
-      if ((w as Window).rdt) return;
-      const p = ((w as Window).rdt = function () {
-        // Queue until external script is loaded.
-        (p as unknown as { sendEvent?: unknown[] }).sendEvent
-          ? (p as unknown as { sendEvent: unknown[] }).sendEvent.push(arguments)
-          : ((p as unknown as { callQueue?: unknown[][] }).callQueue = [
-              ...(p as unknown as { callQueue?: unknown[][] }).callQueue || [],
-              Array.from(arguments)
-            ]);
-      } as unknown as (...args: unknown[]) => void);
-      const scriptTag = d.createElement("script");
-      scriptTag.src = "https://www.redditstatic.com/ads/pixel.js";
-      scriptTag.async = true;
-      const firstScript = d.getElementsByTagName("script")[0];
-      firstScript.parentNode?.insertBefore(scriptTag, firstScript);
-    })(window, document);
-  }
+  installRedditPixelStub();
 
   if (initializedPixelId !== pixelId) {
     window.rdt?.("init", pixelId.trim(), { optOut: false, useDecimalCurrencyValues: true });
