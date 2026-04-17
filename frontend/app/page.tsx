@@ -182,72 +182,81 @@ export default function HomePage() {
     await fireEvent(entry.eventType as RedditEventName, payload, { replayOf: entry.id });
   };
 
-  return (
-    <main className="mx-auto min-h-screen max-w-6xl p-6">
-      <h1 className="mb-2 text-3xl font-bold">Reddit Pixel + CAPI Validation App</h1>
-      <p className="mb-6 text-slate-600">Test client-side and server-side event delivery with shared logs.</p>
+  const sourceBadgeClass = (source: EventLogEntry["source"]) => {
+    if (source === "pixel") return "bg-blue-100 text-blue-700";
+    if (source === "capi") return "bg-emerald-100 text-emerald-700";
+    return "bg-slate-200 text-slate-700";
+  };
 
-      <section className="mb-6 grid gap-4 rounded-lg border bg-white p-4 md:grid-cols-2">
+  return (
+    <main className="min-h-screen bg-gradient-to-b from-slate-100 via-slate-50 to-white">
+      <div className="mx-auto max-w-7xl px-4 py-8 md:px-6 lg:px-8">
+        <header className="mb-8 rounded-2xl border border-slate-200 bg-white/80 p-6 shadow-sm backdrop-blur">
+          <h1 className="text-3xl font-bold tracking-tight text-slate-900 md:text-4xl">Reddit Pixel + CAPI Validation App</h1>
+          <p className="mt-2 text-slate-600">Test client-side and server-side event delivery with shared logs.</p>
+        </header>
+
+      <section className="mb-6 grid gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2">
         <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium">Reddit Pixel ID</span>
+          <span className="text-sm font-medium text-slate-700">Reddit Pixel ID</span>
           <input
-            className="rounded border p-2"
+            className="rounded-lg border border-slate-300 p-2.5 text-sm shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
             value={pixelId}
             onChange={(e) => setPixelId(e.target.value)}
             placeholder="Enter Pixel ID"
           />
         </label>
         <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium">Test Event Code</span>
+          <span className="text-sm font-medium text-slate-700">Test Event Code</span>
           <input
-            className="rounded border p-2"
+            className="rounded-lg border border-slate-300 p-2.5 text-sm shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
             value={testEventCode}
             onChange={(e) => setTestEventCode(e.target.value)}
             placeholder="Optional test event code"
           />
         </label>
-        <div className="flex items-center gap-6">
-          <label className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-5">
+          <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
             <input type="checkbox" checked={debugMode} onChange={(e) => setDebugMode(e.target.checked)} />
             <span>Debug Mode</span>
           </label>
-          <label className="flex items-center gap-2">
+          <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
             <input type="checkbox" checked={testMode} onChange={(e) => setTestMode(e.target.checked)} />
             <span>Test Mode</span>
           </label>
         </div>
-        <label className="flex items-center gap-2">
-          <span>Delay (ms):</span>
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <span className="font-medium">Delay (ms):</span>
           <input
             type="number"
-            className="w-32 rounded border p-2"
+            className="w-32 rounded-lg border border-slate-300 p-2 text-sm shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
             value={delayMs}
             onChange={(e) => setDelayMs(Number(e.target.value) || 0)}
           />
         </label>
       </section>
 
-      <section className="mb-6 grid gap-4 rounded-lg border bg-white p-4 md:grid-cols-2">
+      <section className="mb-6 grid gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2">
         <button
-          className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+          className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
           onClick={() => fireEvent("PageVisit", { ...baseMeta })}
         >
           Fire PageVisit
         </button>
         <button
-          className="rounded bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700"
+          className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
           onClick={() => fireEvent("ViewContent", { item_count: 1, ...baseMeta })}
         >
           View Product
         </button>
         <button
-          className="rounded bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-700"
+          className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
           onClick={() => fireEvent("AddToCart", { value: 49.99, currency: "USD", quantity: 1, ...baseMeta })}
         >
           Add to Cart
         </button>
         <button
-          className="rounded bg-purple-600 px-4 py-2 text-white hover:bg-purple-700"
+          className="rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-purple-700"
           onClick={() =>
             fireEvent("Purchase", {
               value: 99.99,
@@ -261,11 +270,11 @@ export default function HomePage() {
         </button>
       </section>
 
-      <section className="mb-6 rounded-lg border bg-white p-4">
-        <h2 className="mb-3 text-xl font-semibold">Sign Up Form</h2>
+      <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="mb-3 text-xl font-semibold text-slate-900">Sign Up Form</h2>
         <form className="grid gap-3 md:grid-cols-3" onSubmit={onSignUp}>
           <input
-            className="rounded border p-2"
+            className="rounded-lg border border-slate-300 p-2.5 text-sm shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
             placeholder="Name"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -273,55 +282,63 @@ export default function HomePage() {
           />
           <input
             type="email"
-            className="rounded border p-2"
+            className="rounded-lg border border-slate-300 p-2.5 text-sm shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
             placeholder="Email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
           />
-          <button className="rounded bg-slate-900 px-4 py-2 text-white hover:bg-slate-800" type="submit">
+          <button className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800" type="submit">
             Sign Up
           </button>
         </form>
       </section>
 
-      <section className="mb-6 rounded-lg border bg-white p-4">
+      <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-wrap items-center gap-3">
           <button
-            className="rounded bg-orange-600 px-4 py-2 text-white hover:bg-orange-700"
+            className="rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-60"
             onClick={simulateUsers}
             disabled={busy}
           >
             Simulate 3 Users
           </button>
-          <span className="text-sm text-slate-600">{busy ? "Running events..." : "Idle"}</span>
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-semibold ${
+              busy ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+            }`}
+          >
+            {busy ? "Running events..." : "Idle"}
+          </span>
         </div>
       </section>
 
       <section className="grid gap-6 md:grid-cols-2">
-        <div className="rounded-lg border bg-white p-4">
-          <h2 className="mb-3 text-xl font-semibold">Live Event Log</h2>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-3 text-xl font-semibold text-slate-900">Live Event Log</h2>
           <div className="max-h-[500px] space-y-3 overflow-auto">
             {eventLog.length === 0 && <p className="text-sm text-slate-500">No events yet.</p>}
             {eventLog.map((entry) => (
-              <article key={entry.id} className="rounded border p-3 text-sm">
+              <article key={entry.id} className="rounded-xl border border-slate-200 bg-slate-50/60 p-3 text-sm">
                 <div className="mb-1 flex items-center justify-between gap-2">
-                  <strong>{entry.source.toUpperCase()}</strong>
+                  <strong className={`rounded-full px-2.5 py-1 text-xs font-semibold ${sourceBadgeClass(entry.source)}`}>
+                    {entry.source.toUpperCase()}
+                  </strong>
                   <span className="text-slate-500">{new Date(entry.timestamp).toLocaleTimeString()}</span>
                 </div>
-                <p className="font-medium">{entry.eventType}</p>
+                <p className="font-semibold text-slate-900">{entry.eventType}</p>
                 {entry.replayOf && <p className="text-xs text-slate-500">Replay of: {entry.replayOf}</p>}
-                <pre className="mt-2 overflow-auto rounded bg-slate-100 p-2 text-xs">
+                <pre className="mt-2 overflow-auto rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-700">
                   {JSON.stringify(entry.payload, null, 2)}
                 </pre>
                 {entry.capi && (
-                  <pre className="mt-2 overflow-auto rounded bg-slate-100 p-2 text-xs">
+                  <pre className="mt-2 overflow-auto rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-700">
                     {JSON.stringify(entry.capi, null, 2)}
                   </pre>
                 )}
                 {entry.source !== "system" && (
                   <button
-                    className="mt-2 rounded border px-2 py-1 text-xs hover:bg-slate-100"
+                    className="mt-2 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 transition hover:bg-slate-100"
                     onClick={() => replayEvent(entry)}
                   >
                     Replay
@@ -332,14 +349,15 @@ export default function HomePage() {
           </div>
         </div>
 
-        <div className="rounded-lg border bg-white p-4">
-          <h2 className="mb-3 text-xl font-semibold">Raw Payload Inspector</h2>
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-3 text-xl font-semibold text-slate-900">Raw Payload Inspector</h2>
           <p className="mb-2 text-sm text-slate-600">Most recent payload sent to Pixel/CAPI:</p>
-          <pre className="max-h-[500px] overflow-auto rounded bg-slate-100 p-3 text-xs">
+          <pre className="max-h-[500px] overflow-auto rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
             {JSON.stringify(lastPayload, null, 2)}
           </pre>
         </div>
       </section>
+      </div>
     </main>
   );
 }
