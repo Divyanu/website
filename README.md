@@ -13,9 +13,9 @@ This project is a minimal full-stack environment for validating Reddit Pixel (cl
   - Delay simulation, simulated users, and event replay
 - Express backend with:
   - `POST /capi/event` endpoint
-  - Reddit CAPI forwarding
-  - SHA-256 hashing of email in `user_data`
-  - Environment variable support for Reddit token and account details
+  - Reddit **v2.0** CAPI forwarding to `https://ads-api.reddit.com/api/v2.0/conversions/events/{account_id}`
+  - Payload shape: `event_at`, `event_type.tracking_type`, `user` (hashed email, `user_agent`, `ip_address`), `event_metadata`
+  - Credentials from env: account id + access token (+ optional pixel id)
 
 ## Project structure
 
@@ -38,9 +38,10 @@ cp backend/.env.example backend/.env
 
 Then set:
 
-- `REDDIT_AD_ACCOUNT_ID`
-- `REDDIT_ACCESS_TOKEN`
-- Optional: `REDDIT_TEST_EVENT_CODE`
+- `REDDIT_AD_ACCOUNT_ID` — used in Reddit URL `POST /api/v2.0/conversions/events/{account_id}`
+- `REDDIT_ACCESS_TOKEN` — Conversion Access Token (Bearer); alias `REDDIT_CONVERSION_ACCESS_TOKEN` also works
+- Optional: `REDDIT_PIXEL_ID` — stored in `event_metadata.pixel_id` for traceability
+- Optional: `REDDIT_TEST_EVENT_CODE` — used when the frontend sends `test_mode: true`
 
 3. Configure frontend environment:
 

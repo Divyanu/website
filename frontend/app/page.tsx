@@ -42,8 +42,26 @@ export default function HomePage() {
   const [eventLog, setEventLog] = useState<EventLogEntry[]>([]);
   /** Only true while "Simulate 3 Users" is running — do not tie this to every fireEvent or parallel sims block the UI. */
   const [simulating, setSimulating] = useState(false);
+  const [capiStatus, setCapiStatus] = useState<{
+    at: string;
+    ok: boolean;
+    eventName: string;
+    httpStatus: number;
+    summary: string;
+    clientRequest: unknown;
+    redditRequest: unknown;
+    redditResponse: unknown;
+  } | null>(null);
 
   const lastPayload = useMemo(() => eventLog[0]?.payload || null, [eventLog]);
+
+  const summarizeCapi = (capi: CapiResult, eventName: string) => {
+    if (capi.ok) return `Success: ${eventName} delivered to Reddit CAPI`;
+    const body = capi.responseBody as Record<string, unknown> | null;
+    const msg = body && (body.error ?? body.message);
+    if (typeof msg === "string") return msg;
+    return `Failed: HTTP ${capi.status}`;
+  };
 
   const appendLog = (entry: EventLogEntry) => {
     setEventLog((prev) => [entry, ...prev].slice(0, 120));
@@ -64,31 +82,60 @@ export default function HomePage() {
     payload: Record<string, unknown>,
     options?: { providedEmail?: string; externalId?: string }
   ): Promise<CapiResult> => {
-    const requestBody = {
+    const requestBody: Record<string, unknown> = {
       event_name: eventName,
       event_time: Math.floor(Date.now() / 1000),
       event_source_url: window.location.href,
-      action_source: "website",
       user_data: {
         email: options?.providedEmail || email || undefined,
         external_id: options?.externalId
       },
       custom_data: payload,
+      client_user_agent: typeof navigator !== "undefined" ? navigator.userAgent : "",
       test_mode: testMode,
       test_event_code: testMode ? testEventCode || undefined : undefined
     };
 
-    const response = await fetch(`${BACKEND_URL}/capi/event`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody)
-    });
-    const body = await response.json();
+    if (typeof payload.value === "number") requestBody.value = payload.value;
+    if (typeof payload.currency === "string") requestBody.currency = payload.currency;
+    if (typeof payload.rdt_cid === "string") requestBody.click_id = payload.rdt_cid;
+
+    let response: Response;
+    try {
+      response = await fetch(`${BACKEND_URL}/capi/event`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody)
+      });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      return {
+        ok: false,
+        status: 0,
+        responseBody: { error: message },
+        requestBody,
+        error: message
+      };
+    }
+
+    const text = await response.text();
+    let body: unknown = {};
+    try {
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      body = { raw: text };
+    }
+
+    const parsed = body as Record<string, unknown>;
+    const redditOk = Boolean(parsed.ok ?? response.ok);
+
     return {
-      ok: response.ok,
+      ok: response.ok && redditOk,
       status: response.status,
       responseBody: body,
-      requestBody
+      requestBody,
+      redditRequestBody: parsed.reddit_request_body,
+      error: typeof parsed.error === "string" ? parsed.error : undefined
     };
   };
 
@@ -137,6 +184,16 @@ export default function HomePage() {
         providedEmail: options?.providedEmail,
         externalId: options?.externalId
       });
+      setCapiStatus({
+        at: new Date().toISOString(),
+        ok: capi.ok,
+        eventName: eventType,
+        httpStatus: capi.status,
+        summary: summarizeCapi(capi, eventType),
+        clientRequest: capi.requestBody,
+        redditRequest: capi.redditRequestBody ?? null,
+        redditResponse: capi.responseBody
+      });
       appendLog({
         id: crypto.randomUUID(),
         source: "capi",
@@ -147,13 +204,24 @@ export default function HomePage() {
         replayOf: options?.replayOf
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setCapiStatus({
+        at: new Date().toISOString(),
+        ok: false,
+        eventName: eventType,
+        httpStatus: 0,
+        summary: message,
+        clientRequest: null,
+        redditRequest: null,
+        redditResponse: { error: message }
+      });
       appendLog({
         id: crypto.randomUUID(),
         source: "capi",
         eventType,
         timestamp: new Date().toISOString(),
         payload: {
-          error: error instanceof Error ? error.message : String(error)
+          error: message
         }
       });
     }
@@ -435,6 +503,54 @@ export default function HomePage() {
             {simulating ? "Simulating users…" : "Idle"}
           </span>
         </div>
+      </section>
+
+      <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <h2 className="mb-2 text-xl font-semibold text-slate-900">CAPI status</h2>
+        <p className="mb-4 text-sm text-slate-600">
+          Last server-side call to Reddit (<code className="rounded bg-slate-100 px-1">POST /capi/event</code> → Reddit
+          v2.0). Configure <code className="rounded bg-slate-100 px-1">REDDIT_AD_ACCOUNT_ID</code>,{" "}
+          <code className="rounded bg-slate-100 px-1">REDDIT_ACCESS_TOKEN</code>, and optional{" "}
+          <code className="rounded bg-slate-100 px-1">REDDIT_PIXEL_ID</code> on the backend.
+        </p>
+        {!capiStatus && <p className="text-sm text-slate-500">No CAPI calls yet.</p>}
+        {capiStatus && (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  capiStatus.ok ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"
+                }`}
+              >
+                {capiStatus.ok ? "Success" : "Failure"}
+              </span>
+              <span className="text-sm font-medium text-slate-800">{capiStatus.eventName}</span>
+              <span className="text-xs text-slate-500">HTTP {capiStatus.httpStatus}</span>
+              <span className="text-xs text-slate-500">{new Date(capiStatus.at).toLocaleString()}</span>
+            </div>
+            <p className="text-sm text-slate-700">{capiStatus.summary}</p>
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Browser → backend</p>
+                <pre className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-800">
+                  {JSON.stringify(capiStatus.clientRequest, null, 2)}
+                </pre>
+              </div>
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Backend → Reddit</p>
+                <pre className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-800">
+                  {JSON.stringify(capiStatus.redditRequest, null, 2)}
+                </pre>
+              </div>
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Reddit response</p>
+              <pre className="max-h-48 overflow-auto rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-800">
+                {JSON.stringify(capiStatus.redditResponse, null, 2)}
+              </pre>
+            </div>
+          </div>
+        )}
       </section>
 
       <section className="grid gap-6 md:grid-cols-2">
