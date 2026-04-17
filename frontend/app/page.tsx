@@ -32,7 +32,7 @@ const shuffle = <T,>(items: T[]): T[] => {
 };
 
 export default function HomePage() {
-  const [pixelId, setPixelId] = useState("");
+  const [pixelId, setPixelId] = useState(process.env.NEXT_PUBLIC_DEFAULT_PIXEL_ID ?? "");
   const [debugMode, setDebugMode] = useState(true);
   const [testMode, setTestMode] = useState(false);
   const [testEventCode, setTestEventCode] = useState("");

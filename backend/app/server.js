@@ -37,8 +37,25 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, service: "reddit-capi-test-backend" });
 });
 
+/** Quick check that CAPI env is set (no secrets returned). */
+app.get("/health/capi", (_req, res) => {
+  const token = (process.env.REDDIT_ACCESS_TOKEN || process.env.REDDIT_CONVERSION_ACCESS_TOKEN || "").trim();
+  const pixel = (process.env.REDDIT_PIXEL_ID || "").trim();
+  res.json({
+    ok: true,
+    reddit_access_token_configured: Boolean(token),
+    reddit_pixel_id_configured: Boolean(pixel),
+    capi_ready: Boolean(token && pixel),
+    hint: "Set REDDIT_ACCESS_TOKEN and REDDIT_PIXEL_ID on this server (Render/Railway/etc.). REDDIT_AD_ACCOUNT_ID is not used by this app."
+  });
+});
+
+function getAccessToken() {
+  return (process.env.REDDIT_ACCESS_TOKEN || process.env.REDDIT_CONVERSION_ACCESS_TOKEN || "").trim();
+}
+
 app.post("/capi/event", async (req, res) => {
-  const accessToken = (process.env.REDDIT_ACCESS_TOKEN || "").trim();
+  const accessToken = getAccessToken();
   const pixelId = (process.env.REDDIT_PIXEL_ID || "").trim();
 
   try {
@@ -71,10 +88,15 @@ app.post("/capi/event", async (req, res) => {
     }
 
     if (!accessToken || !pixelId) {
-      console.error("[capi/event] 500 missing env REDDIT_ACCESS_TOKEN or REDDIT_PIXEL_ID");
+      const missing = [];
+      if (!accessToken) missing.push("REDDIT_ACCESS_TOKEN");
+      if (!pixelId) missing.push("REDDIT_PIXEL_ID");
+      console.error("[capi/event] 500 missing env:", missing.join(", "));
       return res.status(500).json({
         ok: false,
-        error: "Server missing REDDIT_ACCESS_TOKEN or REDDIT_PIXEL_ID in environment"
+        error: `Missing environment variable(s): ${missing.join(", ")}. Add them in your host’s Environment settings and redeploy. This app does not use REDDIT_AD_ACCOUNT_ID.`,
+        missing,
+        docs: "GET /health/capi on this server to verify configuration."
       });
     }
 
@@ -171,4 +193,9 @@ app.post("/capi/event", async (req, res) => {
 app.listen(port, () => {
   console.log(`Reddit CAPI backend listening on http://localhost:${port}`);
   console.log(`CAPI → ${REDDIT_CAPI_URL} (sandbox: test_mode defaults to true)`);
+  if (!getAccessToken() || !process.env.REDDIT_PIXEL_ID?.trim()) {
+    console.warn(
+      "[startup] CAPI is not fully configured: set REDDIT_ACCESS_TOKEN (or REDDIT_CONVERSION_ACCESS_TOKEN) and REDDIT_PIXEL_ID. Check GET /health/capi"
+    );
+  }
 });

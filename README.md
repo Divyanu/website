@@ -96,6 +96,19 @@ Backend should be deployed separately (for example Render/Railway/Fly) and must 
 - In Reddit Ads Manager, open Events Manager / diagnostics.
 - Confirm events and deduplication behavior using the shared conversion id.
 
+## Troubleshooting CAPI env errors
+
+If you see **`REDDIT_AD_ACCOUNT_ID`** in an error message, that text is from an **older backend build**. Redeploy the current `backend/app/server.js` from this repo.
+
+This server only needs:
+
+- `REDDIT_ACCESS_TOKEN` (or `REDDIT_CONVERSION_ACCESS_TOKEN`)
+- `REDDIT_PIXEL_ID`
+
+On Render, Railway, Fly, etc., add those in **Environment Variables** for the **backend** service (not only Vercel). A local `.env` file is **not** uploaded to the cloud unless your host loads it.
+
+Verify without secrets: open **`GET https://<your-backend-host>/health/capi`** — both flags should be `true`.
+
 ## Notes
 
 - Pixel loading and tracking: `frontend/lib/redditPixel.ts`
