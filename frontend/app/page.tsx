@@ -40,7 +40,8 @@ export default function HomePage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [eventLog, setEventLog] = useState<EventLogEntry[]>([]);
-  const [busy, setBusy] = useState(false);
+  /** Only true while "Simulate 3 Users" is running — do not tie this to every fireEvent or parallel sims block the UI. */
+  const [simulating, setSimulating] = useState(false);
 
   const lastPayload = useMemo(() => eventLog[0]?.payload || null, [eventLog]);
 
@@ -101,7 +102,6 @@ export default function HomePage() {
       return;
     }
 
-    setBusy(true);
     ensureRedditPixel(pixelId, debugMode);
 
     if (delayMs > 0) {
@@ -156,8 +156,6 @@ export default function HomePage() {
           error: error instanceof Error ? error.message : String(error)
         }
       });
-    } finally {
-      setBusy(false);
     }
   };
 
@@ -175,64 +173,116 @@ export default function HomePage() {
   };
 
   const simulateUsers = async () => {
-    const events: RedditEventName[] = ["PageVisit", "ViewContent", "AddToCart", "Purchase"];
-    const simulatedUsers = Array.from({ length: 3 }, () => {
-      const user = randomUser();
-      return {
-        ...user,
-        externalId: crypto.randomUUID(),
-        events: shuffle(events)
-      };
-    });
+    if (!pixelId.trim()) {
+      pushSystemLog("Set a Pixel ID before simulating users.");
+      return;
+    }
 
-    await Promise.all(
-      simulatedUsers.map(async (simUser, userIndex) => {
-        await fireEvent(
-          "SignUp",
-          {
-            name: simUser.name,
-            email: simUser.email,
-            user_external_id: simUser.externalId,
-            ...baseMeta
-          },
-          {
-            providedEmail: simUser.email,
-            externalId: simUser.externalId,
-            userId: simUser.externalId
+    setSimulating(true);
+    try {
+      /** Browse funnel only; cart + purchase are appended so every user completes checkout. */
+      const browseEvents: RedditEventName[] = ["PageVisit", "ViewContent", "AddToCart"];
+      const simulatedUsers = Array.from({ length: 3 }, () => {
+        const user = randomUser();
+        return {
+          ...user,
+          externalId: crypto.randomUUID(),
+          events: shuffle(browseEvents)
+        };
+      });
+
+      await Promise.all(
+        simulatedUsers.map(async (simUser, userIndex) => {
+          await fireEvent(
+            "SignUp",
+            {
+              name: simUser.name,
+              email: simUser.email,
+              user_external_id: simUser.externalId,
+              ...baseMeta
+            },
+            {
+              providedEmail: simUser.email,
+              externalId: simUser.externalId,
+              userId: simUser.externalId
+            }
+          );
+
+          for (const eventName of simUser.events) {
+            await new Promise((resolve) => setTimeout(resolve, randomDelay()));
+
+            const eventPayload: Record<string, unknown> = {
+              ...baseMeta,
+              user_external_id: simUser.externalId,
+              user_name: simUser.name
+            };
+
+            if (eventName === "ViewContent") {
+              eventPayload.item_count = 1;
+              eventPayload.content_type = "product";
+            }
+            if (eventName === "AddToCart") {
+              eventPayload.value = 49.99 + userIndex;
+              eventPayload.currency = "USD";
+              eventPayload.quantity = 1;
+            }
+
+            await fireEvent(eventName, eventPayload, {
+              providedEmail: simUser.email,
+              externalId: simUser.externalId,
+              userId: simUser.externalId
+            });
           }
-        );
 
-        for (const eventName of simUser.events) {
           await new Promise((resolve) => setTimeout(resolve, randomDelay()));
+          await fireEvent(
+            "ViewContent",
+            {
+              ...baseMeta,
+              user_external_id: simUser.externalId,
+              user_name: simUser.name,
+              content_type: "cart",
+              cart_view: true,
+              item_count: 1,
+              line_items: [
+                {
+                  id: baseMeta.product_id,
+                  quantity: 1,
+                  value: 49.99 + userIndex,
+                  currency: "USD"
+                }
+              ]
+            },
+            {
+              providedEmail: simUser.email,
+              externalId: simUser.externalId,
+              userId: simUser.externalId
+            }
+          );
 
-          const eventPayload: Record<string, unknown> = {
-            ...baseMeta,
-            user_external_id: simUser.externalId,
-            user_name: simUser.name
-          };
-
-          if (eventName === "ViewContent") {
-            eventPayload.item_count = 1;
-          }
-          if (eventName === "AddToCart") {
-            eventPayload.value = 49.99 + userIndex;
-            eventPayload.currency = "USD";
-            eventPayload.quantity = 1;
-          }
-          if (eventName === "Purchase") {
-            eventPayload.value = 99.99 + userIndex;
-            eventPayload.currency = "USD";
-            eventPayload.order_id = `order-${simUser.externalId}-${Date.now()}`;
-          }
-
-          await fireEvent(eventName, eventPayload, {
-            providedEmail: simUser.email,
-            externalId: simUser.externalId,
-            userId: simUser.externalId
-          });
-        }
-      })
-    );
+          await new Promise((resolve) => setTimeout(resolve, randomDelay()));
+          await fireEvent(
+            "Purchase",
+            {
+              ...baseMeta,
+              user_external_id: simUser.externalId,
+              user_name: simUser.name,
+              value: 99.99 + userIndex,
+              currency: "USD",
+              order_id: `order-${simUser.externalId}-${Date.now()}`,
+              items: [{ id: baseMeta.product_id, quantity: 1 }]
+            },
+            {
+              providedEmail: simUser.email,
+              externalId: simUser.externalId,
+              userId: simUser.externalId
+            }
+          );
+        })
+      );
+    } finally {
+      setSimulating(false);
+    }
   };
 
   const replayEvent = async (entry: EventLogEntry) => {
@@ -296,7 +346,7 @@ export default function HomePage() {
         </label>
       </section>
 
-      <section className="mb-6 grid gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2">
+      <section className="mb-6 grid gap-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm md:grid-cols-2 lg:grid-cols-3">
         <button
           className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
           onClick={() => fireEvent("PageVisit", { ...baseMeta })}
@@ -305,7 +355,7 @@ export default function HomePage() {
         </button>
         <button
           className="rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-indigo-700"
-          onClick={() => fireEvent("ViewContent", { item_count: 1, ...baseMeta })}
+          onClick={() => fireEvent("ViewContent", { item_count: 1, content_type: "product", ...baseMeta })}
         >
           View Product
         </button>
@@ -314,6 +364,20 @@ export default function HomePage() {
           onClick={() => fireEvent("AddToCart", { value: 49.99, currency: "USD", quantity: 1, ...baseMeta })}
         >
           Add to Cart
+        </button>
+        <button
+          className="rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-cyan-700"
+          onClick={() =>
+            fireEvent("ViewContent", {
+              ...baseMeta,
+              content_type: "cart",
+              cart_view: true,
+              item_count: 1,
+              line_items: [{ id: baseMeta.product_id, quantity: 1, value: 49.99, currency: "USD" }]
+            })
+          }
+        >
+          View Cart
         </button>
         <button
           className="rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-purple-700"
@@ -359,16 +423,16 @@ export default function HomePage() {
           <button
             className="rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-60"
             onClick={simulateUsers}
-            disabled={busy}
+            disabled={simulating}
           >
             Simulate 3 Users
           </button>
           <span
             className={`rounded-full px-3 py-1 text-xs font-semibold ${
-              busy ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
+              simulating ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"
             }`}
           >
-            {busy ? "Running events..." : "Idle"}
+            {simulating ? "Simulating users…" : "Idle"}
           </span>
         </div>
       </section>
