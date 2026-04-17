@@ -12,57 +12,55 @@ This project is a minimal full-stack environment for validating Reddit Pixel (cl
   - Live event log and **CAPI status** panel (request to backend, JSON sent to Reddit, Reddit response)
   - Delay simulation, simulated users, and event replay
 - Express backend with:
-  - `POST /capi/event` — accepts event fields, fills **IP** and **user agent** from the request, injects **`REDDIT_PIXEL_ID`** and **`REDDIT_ACCESS_TOKEN`** from env (never sent to the browser)
-  - Forwards to `POST https://ads-api.reddit.com/api/v2/conversions/events` with sandbox-friendly **`test_mode: true`**
-  - Console logging for debugging
+  - `POST /capi/event` — builds Reddit’s **v2.0** payload and posts to **`/api/v2.0/conversions/events/{account_id}`**
+  - Env: **`REDDIT_ACCESS_TOKEN`**, **`REDDIT_PIXEL_ID`**, **`REDDIT_AD_ACCOUNT_ID`** (or account id read from JWT `aid` / `lid`)
+  - Sandbox-friendly **`test_mode: true`** by default; console logging for debugging
 
 ## Project structure
 
 - `frontend` - Next.js app
 - `backend` - Express API server
 
-## Setup
+## Setup (automated)
 
-1. Install dependencies:
-
-```bash
-npm run install:all
-```
-
-2. Configure backend environment:
+From the repository root:
 
 ```bash
-cp backend/.env.example backend/.env
+npm install
+npm run setup
 ```
 
-Then set:
+`setup` installs backend + frontend dependencies and creates **`backend/.env`** and **`frontend/.env.local`** from the examples **only if those files do not exist yet**. Then edit **`backend/.env`** and set:
 
 - `REDDIT_ACCESS_TOKEN` — Conversion Access Token (Bearer)
-- `REDDIT_PIXEL_ID` — same pixel you use in the UI (server attaches it to the CAPI payload)
+- `REDDIT_PIXEL_ID` — pixel id (included in `event_metadata`)
+- `REDDIT_AD_ACCOUNT_ID` — Ads account id (e.g. `t2_…`) for the CAPI URL; optional if your JWT already includes `aid`
+- Optional: `REDDIT_TEST_EVENT_CODE`
 
-3. Configure frontend environment:
+Edit **`frontend/.env.local`** if your API is not on `http://localhost:4000` (set `NEXT_PUBLIC_BACKEND_URL`).
+
+Check configuration without starting the UI:
 
 ```bash
-cp frontend/.env.example frontend/.env.local
+npm run verify
 ```
-
-Defaults to backend URL `http://localhost:4000`.
 
 ## Run
 
-Run backend:
+**Both** servers in one terminal:
+
+```bash
+npm run dev
+```
+
+Then open [http://localhost:3000](http://localhost:3000) (frontend) and ensure the backend answers at [http://localhost:4000/health/capi](http://localhost:4000/health/capi).
+
+Or run them separately:
 
 ```bash
 npm run dev:backend
-```
-
-Run frontend (new terminal):
-
-```bash
 npm run dev:frontend
 ```
-
-Open [http://localhost:3000](http://localhost:3000).
 
 ## Deploy on Vercel (important)
 
@@ -79,6 +77,7 @@ Backend should be deployed separately (for example Render/Railway/Fly) and must 
 
 - `REDDIT_ACCESS_TOKEN`
 - `REDDIT_PIXEL_ID`
+- `REDDIT_AD_ACCOUNT_ID` (recommended; otherwise JWT must expose `aid`)
 
 ## How to test events
 
@@ -96,18 +95,13 @@ Backend should be deployed separately (for example Render/Railway/Fly) and must 
 - In Reddit Ads Manager, open Events Manager / diagnostics.
 - Confirm events and deduplication behavior using the shared conversion id.
 
-## Troubleshooting CAPI env errors
+## Troubleshooting CAPI (HTTP 500 / failures)
 
-If you see **`REDDIT_AD_ACCOUNT_ID`** in an error message, that text is from an **older backend build**. Redeploy the current `backend/app/server.js` from this repo.
+1. Open **`GET /health/capi`** on your backend — `capi_ready` must be `true` (token + pixel + **resolved account id**).
+2. If **`reddit_account_id_resolved`** is false, set **`REDDIT_AD_ACCOUNT_ID`** (from Reddit Ads Manager, often `t2_…`) or use a conversion JWT that includes **`aid`**.
+3. The old flat URL **`/api/v2/conversions/events`** (no account in path) is **not** what this server uses anymore — redeploy the latest backend if errors persist.
 
-This server only needs:
-
-- `REDDIT_ACCESS_TOKEN` (or `REDDIT_CONVERSION_ACCESS_TOKEN`)
-- `REDDIT_PIXEL_ID`
-
-On Render, Railway, Fly, etc., add those in **Environment Variables** for the **backend** service (not only Vercel). A local `.env` file is **not** uploaded to the cloud unless your host loads it.
-
-Verify without secrets: open **`GET https://<your-backend-host>/health/capi`** — both flags should be `true`.
+Secrets belong only on the **backend** host env, not on Vercel `NEXT_PUBLIC_*` vars.
 
 ## Notes
 

@@ -101,6 +101,10 @@ export default function HomePage() {
       event_source_url: window.location.href,
       conversion_id: conversionId,
       custom_data: customRest,
+      user_data: {
+        email: options?.providedEmail || email || undefined,
+        external_id: options?.externalId
+      },
       client_user_agent: typeof navigator !== "undefined" ? navigator.userAgent : "",
       test_mode: true
     };
@@ -549,11 +553,12 @@ export default function HomePage() {
       <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-2 text-xl font-semibold text-slate-900">CAPI status</h2>
         <p className="mb-4 text-sm text-slate-600">
-          Last server-side call: browser <code className="rounded bg-slate-100 px-1">POST /capi/event</code> → Reddit{" "}
-          <code className="rounded bg-slate-100 px-1">/api/v2/conversions/events</code>. Backend env:{" "}
+          Browser <code className="rounded bg-slate-100 px-1">POST /capi/event</code> → Reddit{" "}
+          <code className="rounded bg-slate-100 px-1">/api/v2.0/conversions/events/{"{account_id}"}</code>. Env:{" "}
           <code className="rounded bg-slate-100 px-1">REDDIT_ACCESS_TOKEN</code>,{" "}
-          <code className="rounded bg-slate-100 px-1">REDDIT_PIXEL_ID</code>. Each click uses one{" "}
-          <code className="rounded bg-slate-100 px-1">conversion_id</code> for Pixel + CAPI deduplication.
+          <code className="rounded bg-slate-100 px-1">REDDIT_PIXEL_ID</code>, and{" "}
+          <code className="rounded bg-slate-100 px-1">REDDIT_AD_ACCOUNT_ID</code> (or <code className="rounded bg-slate-100 px-1">aid</code>{" "}
+          inside your JWT). One <code className="rounded bg-slate-100 px-1">conversion_id</code> per click for Pixel + CAPI.
         </p>
         {!capiStatus && <p className="text-sm text-slate-500">No CAPI calls yet.</p>}
         {capiStatus && (

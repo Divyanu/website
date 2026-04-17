@@ -43,10 +43,10 @@ export function ensureRedditPixel(pixelId: string, debug = true) {
   if (initializedPixelId !== pixelId) {
     window.rdt?.("init", pixelId.trim(), { optOut: false, useDecimalCurrencyValues: true });
     initializedPixelId = pixelId;
-  }
-
-  if (debug) {
-    window.rdt?.("track", "PageVisit");
+    // Only once per pixel init — do not fire PageVisit on every button click (was causing huge Pixel noise).
+    if (debug) {
+      window.rdt?.("track", "PageVisit");
+    }
   }
 }
 

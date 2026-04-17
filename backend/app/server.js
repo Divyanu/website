@@ -1,13 +1,15 @@
 /**
- * Reddit Conversion API (CAPI) — sandbox integration
+ * Reddit Conversion API (CAPI)
  *
- * Forwards browser-originated events to Reddit using the payload shape required for this project.
- * Secrets stay server-side: REDDIT_ACCESS_TOKEN, REDDIT_PIXEL_ID (never sent to the browser).
+ * Reddit’s working server endpoint is:
+ *   POST https://ads-api.reddit.com/api/v2.0/conversions/events/{account_id}
  *
- * Reddit endpoint (per project spec):
- *   POST https://ads-api.reddit.com/api/v2/conversions/events
+ * The flat URL `/api/v2/conversions/events` + legacy body often returns 4xx/5xx — that was causing your HTTP 500s.
+ *
+ * Env: REDDIT_ACCESS_TOKEN, REDDIT_PIXEL_ID, and REDDIT_AD_ACCOUNT_ID (or we try to read `aid` from a JWT token).
  */
 
+const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
@@ -22,7 +24,56 @@ app.use(express.json({ limit: "1mb" }));
 
 const port = process.env.PORT || 4000;
 
-const REDDIT_CAPI_URL = "https://ads-api.reddit.com/api/v2/conversions/events";
+const RDT_STANDARD = new Set([
+  "PageVisit",
+  "Search",
+  "AddToCart",
+  "AddToWishlist",
+  "Purchase",
+  "ViewContent",
+  "Lead",
+  "SignUp",
+  "Custom"
+]);
+
+const sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
+
+function hashEmail(email) {
+  if (!email || typeof email !== "string") return undefined;
+  const t = email.trim().toLowerCase();
+  const p = t.split("@");
+  if (p.length !== 2) return undefined;
+  const local = p[0].replace(/\./g, "").split("+")[0] || p[0];
+  return sha256(`${local}@${p[1]}`);
+}
+
+function hashExternalId(v) {
+  if (!v || typeof v !== "string") return undefined;
+  const t = v.trim();
+  if (/^[a-f0-9]{64}$/i.test(t)) return t.toLowerCase();
+  return sha256(t.toLowerCase());
+}
+
+function hashIp(ip) {
+  if (!ip || typeof ip !== "string") return undefined;
+  const t = ip.trim();
+  if (!t) return undefined;
+  return sha256(t.toLowerCase());
+}
+
+/** Reddit Ads JWT (conversion access token) often includes advertiser id as `aid` / `lid`. */
+function extractAccountIdFromJwt(token) {
+  if (!token || typeof token !== "string" || !token.includes(".")) return null;
+  try {
+    const part = token.split(".")[1];
+    const json = JSON.parse(Buffer.from(part, "base64url").toString("utf8"));
+    if (json.aid && typeof json.aid === "string") return json.aid.trim();
+    if (json.lid && typeof json.lid === "string") return json.lid.trim();
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 function clientIp(req) {
   const xff = req.headers["x-forwarded-for"];
@@ -33,30 +84,51 @@ function clientIp(req) {
   return req.socket?.remoteAddress || "";
 }
 
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "reddit-capi-test-backend" });
-});
-
-/** Quick check that CAPI env is set (no secrets returned). */
-app.get("/health/capi", (_req, res) => {
-  const token = (process.env.REDDIT_ACCESS_TOKEN || process.env.REDDIT_CONVERSION_ACCESS_TOKEN || "").trim();
-  const pixel = (process.env.REDDIT_PIXEL_ID || "").trim();
-  res.json({
-    ok: true,
-    reddit_access_token_configured: Boolean(token),
-    reddit_pixel_id_configured: Boolean(pixel),
-    capi_ready: Boolean(token && pixel),
-    hint: "Set REDDIT_ACCESS_TOKEN and REDDIT_PIXEL_ID on this server (Render/Railway/etc.). REDDIT_AD_ACCOUNT_ID is not used by this app."
-  });
-});
-
 function getAccessToken() {
   return (process.env.REDDIT_ACCESS_TOKEN || process.env.REDDIT_CONVERSION_ACCESS_TOKEN || "").trim();
 }
 
+function getAccountId() {
+  const fromEnv = (process.env.REDDIT_AD_ACCOUNT_ID || "").trim();
+  if (fromEnv) return fromEnv;
+  const token = getAccessToken();
+  return extractAccountIdFromJwt(token) || "";
+}
+
+function buildEventType(name) {
+  const n = String(name || "").trim();
+  if (RDT_STANDARD.has(n) && n !== "Custom") return { tracking_type: n };
+  return { tracking_type: "Custom", custom_event_name: n || "Custom" };
+}
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, service: "reddit-capi-test-backend" });
+});
+
+app.get("/health/capi", (_req, res) => {
+  const token = getAccessToken();
+  const pixel = (process.env.REDDIT_PIXEL_ID || "").trim();
+  const account = getAccountId();
+  res.json({
+    ok: true,
+    reddit_access_token_configured: Boolean(token),
+    reddit_pixel_id_configured: Boolean(pixel),
+    reddit_ad_account_id_configured: Boolean((process.env.REDDIT_AD_ACCOUNT_ID || "").trim()),
+    reddit_account_id_resolved: Boolean(account),
+    account_id_source: (process.env.REDDIT_AD_ACCOUNT_ID || "").trim()
+      ? "REDDIT_AD_ACCOUNT_ID"
+      : account
+        ? "JWT aid/lid"
+        : "missing",
+    capi_ready: Boolean(token && pixel && account),
+    hint: "CAPI uses POST .../api/v2.0/conversions/events/{account_id}. Set REDDIT_AD_ACCOUNT_ID (e.g. t2_xxx) or use a JWT token that includes aid."
+  });
+});
+
 app.post("/capi/event", async (req, res) => {
   const accessToken = getAccessToken();
   const pixelId = (process.env.REDDIT_PIXEL_ID || "").trim();
+  const accountId = getAccountId();
 
   try {
     const {
@@ -66,13 +138,13 @@ app.post("/capi/event", async (req, res) => {
       conversion_id,
       custom_data = {},
       client_user_agent,
+      user_data = {},
       value: bodyValue,
       currency: bodyCurrency,
       test_mode
     } = req.body;
 
     if (!event_name || !event_source_url) {
-      console.warn("[capi/event] 400 missing fields", { event_name: !!event_name, event_source_url: !!event_source_url });
       return res.status(400).json({
         ok: false,
         error: "event_name and event_source_url are required"
@@ -80,10 +152,9 @@ app.post("/capi/event", async (req, res) => {
     }
 
     if (!conversion_id || typeof conversion_id !== "string") {
-      console.warn("[capi/event] 400 missing conversion_id");
       return res.status(400).json({
         ok: false,
-        error: "conversion_id is required (use the same id as the Pixel for deduplication)"
+        error: "conversion_id is required (same id as Pixel for deduplication)"
       });
     }
 
@@ -91,22 +162,30 @@ app.post("/capi/event", async (req, res) => {
       const missing = [];
       if (!accessToken) missing.push("REDDIT_ACCESS_TOKEN");
       if (!pixelId) missing.push("REDDIT_PIXEL_ID");
-      console.error("[capi/event] 500 missing env:", missing.join(", "));
       return res.status(500).json({
         ok: false,
-        error: `Missing environment variable(s): ${missing.join(", ")}. Add them in your host’s Environment settings and redeploy. This app does not use REDDIT_AD_ACCOUNT_ID.`,
-        missing,
-        docs: "GET /health/capi on this server to verify configuration."
+        error: `Missing: ${missing.join(", ")}`,
+        missing
       });
     }
 
-    const eventTime =
+    if (!accountId) {
+      return res.status(500).json({
+        ok: false,
+        error:
+          "Missing Reddit ad account id for CAPI URL. Set REDDIT_AD_ACCOUNT_ID (e.g. t2_abc from Ads Manager) or use a conversion JWT that contains an `aid` claim.",
+        hint: "GET /health/capi — account_id_resolved should be true."
+      });
+    }
+
+    const eventTimeSec =
       typeof event_time === "number" && Number.isFinite(event_time)
         ? event_time
         : Math.floor(Date.now() / 1000);
+    const eventAtIso = new Date(eventTimeSec * 1000).toISOString();
 
     const ua = (client_user_agent && String(client_user_agent).trim()) || req.get("user-agent") || "";
-    const ip = clientIp(req);
+    const ipPlain = clientIp(req);
 
     const merged =
       custom_data && typeof custom_data === "object" && !Array.isArray(custom_data) ? { ...custom_data } : {};
@@ -114,39 +193,60 @@ app.post("/capi/event", async (req, res) => {
     delete merged.conversionId;
 
     const v = merged.value != null ? merged.value : bodyValue;
-    const c = merged.currency != null ? merged.currency : bodyCurrency;
+    const cur = merged.currency != null ? merged.currency : bodyCurrency;
     if (v != null && v !== "") {
       const n = Number(v);
       merged.value = Number.isNaN(n) ? v : n;
     }
-    if (c != null && c !== "") {
-      merged.currency = String(c);
-    }
+    if (cur != null && cur !== "") merged.currency = String(cur);
 
-    const customDataOut = merged;
+    const event_metadata = {
+      ...merged,
+      conversion_id: String(conversion_id),
+      url: String(event_source_url),
+      pixel_id: pixelId
+    };
+
+    const user = {};
+    const plainEmail = user_data?.email || merged.email;
+    if (plainEmail && typeof plainEmail === "string") {
+      const h = hashEmail(plainEmail);
+      if (h) user.email = h;
+    }
+    if (user_data?.external_id) {
+      const h = hashExternalId(String(user_data.external_id));
+      if (h) user.external_id = h;
+    }
+    if (ua) user.user_agent = ua;
+    const ipHash = hashIp(ipPlain);
+    if (ipHash) user.ip = ipHash;
+
+    const redditEvent = {
+      event_at: eventAtIso,
+      event_type: buildEventType(event_name),
+      user,
+      event_metadata
+    };
+
+    const cid = user_data?.click_id || merged.rdt_cid;
+    if (cid) redditEvent.click_id = String(cid);
 
     const redditRequestBody = {
       test_mode: test_mode !== false,
-      pixel_id: pixelId,
-      events: [
-        {
-          event_name: String(event_name),
-          event_time: eventTime,
-          event_source_url: String(event_source_url),
-          conversion_id: String(conversion_id),
-          user_data: {
-            ...(ip ? { client_ip_address: ip } : {}),
-            ...(ua ? { client_user_agent: ua } : {})
-          },
-          custom_data: customDataOut
-        }
-      ]
+      events: [redditEvent]
     };
 
-    console.log("[capi/event] Reddit CAPI request", JSON.stringify({ ...redditRequestBody, pixel_id: "[set]" }, null, 2));
-    console.log("[capi/event] POST", REDDIT_CAPI_URL);
+    const testCode = process.env.REDDIT_TEST_EVENT_CODE;
+    if (redditRequestBody.test_mode && testCode) {
+      redditRequestBody.test_event_code = testCode;
+    }
 
-    const redditResponse = await fetch(REDDIT_CAPI_URL, {
+    const url = `https://ads-api.reddit.com/api/v2.0/conversions/events/${encodeURIComponent(accountId)}`;
+
+    console.log("[capi/event] POST", url);
+    console.log("[capi/event] body (pixel_id in metadata only)", JSON.stringify(redditRequestBody, null, 2));
+
+    const redditResponse = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -161,16 +261,16 @@ app.post("/capi/event", async (req, res) => {
     try {
       redditJson = rawText ? JSON.parse(rawText) : {};
     } catch {
-      redditJson = { parse_error: true, raw: rawText };
+      redditJson = { parse_error: true, raw: rawText.slice(0, 2000) };
     }
 
     if (redditResponse.ok) {
-      console.log("[capi/event] Reddit OK", redditResponse.status, JSON.stringify(redditJson, null, 2));
+      console.log("[capi/event] Reddit OK", redditResponse.status);
     } else {
-      console.error("[capi/event] Reddit error", redditResponse.status, JSON.stringify(redditJson, null, 2));
+      console.error("[capi/event] Reddit error", redditResponse.status, redditJson);
     }
 
-    return res.status(redditResponse.ok ? 200 : redditResponse.status).json({
+    return res.status(redditResponse.ok ? 200 : redditResponse.status || 502).json({
       ok: redditResponse.ok,
       status: redditResponse.status,
       reddit_status: redditResponse.status,
@@ -190,12 +290,21 @@ app.post("/capi/event", async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Reddit CAPI backend listening on http://localhost:${port}`);
-  console.log(`CAPI → ${REDDIT_CAPI_URL} (sandbox: test_mode defaults to true)`);
-  if (!getAccessToken() || !process.env.REDDIT_PIXEL_ID?.trim()) {
-    console.warn(
-      "[startup] CAPI is not fully configured: set REDDIT_ACCESS_TOKEN (or REDDIT_CONVERSION_ACCESS_TOKEN) and REDDIT_PIXEL_ID. Check GET /health/capi"
-    );
+const server = app.listen(port, () => {
+  console.log(`Reddit CAPI backend http://localhost:${port}`);
+  const acc = getAccountId();
+  console.log(
+    acc
+      ? `[capi] Account id resolved for v2.0 URL: ${acc.slice(0, 6)}…`
+      : "[capi] WARNING: no account id — set REDDIT_AD_ACCOUNT_ID or use JWT with `aid`"
+  );
+});
+
+server.on("error", (err) => {
+  if (err && err.code === "EADDRINUSE") {
+    console.error(`[startup] Port ${port} is already in use. Stop the other process or set PORT=4001 in backend/.env`);
+  } else {
+    console.error("[startup]", err);
   }
+  process.exit(1);
 });
