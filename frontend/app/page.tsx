@@ -20,6 +20,17 @@ function randomUser() {
   };
 }
 
+const randomDelay = (min = 100, max = 1000) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+const shuffle = <T,>(items: T[]): T[] => {
+  const array = [...items];
+  for (let i = array.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+  return array;
+};
+
 export default function HomePage() {
   const [pixelId, setPixelId] = useState("");
   const [debugMode, setDebugMode] = useState(true);
@@ -50,7 +61,7 @@ export default function HomePage() {
   const sendCapiEvent = async (
     eventName: RedditEventName,
     payload: Record<string, unknown>,
-    providedEmail?: string
+    options?: { providedEmail?: string; externalId?: string }
   ): Promise<CapiResult> => {
     const requestBody = {
       event_name: eventName,
@@ -58,7 +69,8 @@ export default function HomePage() {
       event_source_url: window.location.href,
       action_source: "website",
       user_data: {
-        email: providedEmail || email || undefined
+        email: options?.providedEmail || email || undefined,
+        external_id: options?.externalId
       },
       custom_data: payload,
       test_mode: testMode,
@@ -82,7 +94,7 @@ export default function HomePage() {
   const fireEvent = async (
     eventType: RedditEventName,
     payload: Record<string, unknown>,
-    options?: { replayOf?: string; providedEmail?: string }
+    options?: { replayOf?: string; providedEmail?: string; externalId?: string; userId?: string }
   ) => {
     if (!pixelId.trim()) {
       pushSystemLog("Set a Pixel ID before firing events.");
@@ -96,13 +108,18 @@ export default function HomePage() {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
 
+    const enrichedPayload = {
+      ...payload,
+      ...(options?.userId ? { simulator_user_id: options.userId } : {})
+    };
+
     const pixelPayload: PixelPayload = {
       eventType,
-      payload,
+      payload: enrichedPayload,
       timestamp: new Date().toISOString()
     };
 
-    const pixelFired = trackRedditEvent(eventType, payload);
+    const pixelFired = trackRedditEvent(eventType, enrichedPayload);
     appendLog({
       id: crypto.randomUUID(),
       source: "pixel",
@@ -116,13 +133,16 @@ export default function HomePage() {
     }
 
     try {
-      const capi = await sendCapiEvent(eventType, payload, options?.providedEmail);
+      const capi = await sendCapiEvent(eventType, enrichedPayload, {
+        providedEmail: options?.providedEmail,
+        externalId: options?.externalId
+      });
       appendLog({
         id: crypto.randomUUID(),
         source: "capi",
         eventType,
         timestamp: new Date().toISOString(),
-        payload,
+        payload: enrichedPayload,
         capi,
         replayOf: options?.replayOf
       });
@@ -155,24 +175,64 @@ export default function HomePage() {
   };
 
   const simulateUsers = async () => {
-    for (let i = 0; i < 3; i += 1) {
+    const events: RedditEventName[] = ["PageVisit", "ViewContent", "AddToCart", "Purchase"];
+    const simulatedUsers = Array.from({ length: 3 }, () => {
       const user = randomUser();
-      await fireEvent(
-        "SignUp",
-        {
-          name: user.name,
-          email: user.email,
-          ...baseMeta
-        },
-        { providedEmail: user.email }
-      );
-      await fireEvent("Purchase", {
-        value: 49.99 + i,
-        currency: "USD",
-        order_id: `order-${Date.now()}-${i}`,
-        ...baseMeta
-      });
-    }
+      return {
+        ...user,
+        externalId: crypto.randomUUID(),
+        events: shuffle(events)
+      };
+    });
+
+    await Promise.all(
+      simulatedUsers.map(async (simUser, userIndex) => {
+        await fireEvent(
+          "SignUp",
+          {
+            name: simUser.name,
+            email: simUser.email,
+            user_external_id: simUser.externalId,
+            ...baseMeta
+          },
+          {
+            providedEmail: simUser.email,
+            externalId: simUser.externalId,
+            userId: simUser.externalId
+          }
+        );
+
+        for (const eventName of simUser.events) {
+          await new Promise((resolve) => setTimeout(resolve, randomDelay()));
+
+          const eventPayload: Record<string, unknown> = {
+            ...baseMeta,
+            user_external_id: simUser.externalId,
+            user_name: simUser.name
+          };
+
+          if (eventName === "ViewContent") {
+            eventPayload.item_count = 1;
+          }
+          if (eventName === "AddToCart") {
+            eventPayload.value = 49.99 + userIndex;
+            eventPayload.currency = "USD";
+            eventPayload.quantity = 1;
+          }
+          if (eventName === "Purchase") {
+            eventPayload.value = 99.99 + userIndex;
+            eventPayload.currency = "USD";
+            eventPayload.order_id = `order-${simUser.externalId}-${Date.now()}`;
+          }
+
+          await fireEvent(eventName, eventPayload, {
+            providedEmail: simUser.email,
+            externalId: simUser.externalId,
+            userId: simUser.externalId
+          });
+        }
+      })
+    );
   };
 
   const replayEvent = async (entry: EventLogEntry) => {
@@ -327,6 +387,13 @@ export default function HomePage() {
                   <span className="text-slate-500">{new Date(entry.timestamp).toLocaleTimeString()}</span>
                 </div>
                 <p className="font-semibold text-slate-900">{entry.eventType}</p>
+                {typeof entry.payload === "object" &&
+                  entry.payload !== null &&
+                  "simulator_user_id" in entry.payload && (
+                    <p className="text-xs text-slate-500">
+                      Simulated user: {(entry.payload as { simulator_user_id: string }).simulator_user_id}
+                    </p>
+                  )}
                 {entry.replayOf && <p className="text-xs text-slate-500">Replay of: {entry.replayOf}</p>}
                 <pre className="mt-2 overflow-auto rounded-lg border border-slate-200 bg-white p-2 text-xs text-slate-700">
                   {JSON.stringify(entry.payload, null, 2)}
